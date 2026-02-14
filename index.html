@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Matrix Code Face Visualizer</title>
+<title>BeatBot</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box;}
 body{overflow:hidden;background:#000;color:white;height:100vh;font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;}
@@ -106,11 +106,110 @@ const face = {
     huePhase:0
 };
 
+// Optimized particle system
+const particles = [];
+const particleCount = 100; // Reduced for performance
+
+for(let i = 0; i < particleCount; i++) {
+    particles.push({
+        x: Math.random() * canvas.width,
+        y: Math.random() * canvas.height,
+        size: Math.random() * 1.5 + 0.5,
+        speedX: (Math.random() - 0.5) * 0.3,
+        speedY: (Math.random() - 0.5) * 0.3,
+        hue: Math.random() * 360,
+        alpha: Math.random() * 0.3 + 0.1,
+        life: 1
+    });
+}
+
+// Optimized MilkDrop-inspired background
+function drawMilkDropBackground(audioIntensity) {
+    // Fading trail effect
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.05)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    
+    // Draw particles with optimized logic
+    for(const p of particles) {
+        // Apply audio-based movement
+        p.x += p.speedX + (Math.random() - 0.5) * audioIntensity * 0.5;
+        p.y += p.speedY + (Math.random() - 0.5) * audioIntensity * 0.5;
+        
+        // Boundary checks
+        if(p.x < 0 || p.x > canvas.width) p.speedX *= -1;
+        if(p.y < 0 || p.y > canvas.height) p.speedY *= -1;
+        
+        // Life cycle
+        p.life -= 0.001;
+        if(p.life <= 0) {
+            p.x = Math.random() * canvas.width;
+            p.y = Math.random() * canvas.height;
+            p.life = 1;
+        }
+        
+        // Draw particle
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+        ctx.fillStyle = `hsla(${p.hue % 360}, 85%, 65%, ${p.alpha * p.life})`;
+        ctx.fill();
+    }
+    
+    // Optimized swirling patterns
+    const swirlCount = 4;
+    const centerX = canvas.width / 2;
+    const centerY = canvas.height / 2;
+    const baseRadius = Math.min(canvas.width, canvas.height) * 0.3;
+    
+    for(let i = 0; i < swirlCount; i++) {
+        const angle = (i / swirlCount) * Math.PI * 2;
+        const radius = baseRadius + i * 15 + Math.sin(Date.now() * 0.002 + i) * 20 * audioIntensity;
+        
+        ctx.beginPath();
+        ctx.arc(
+            centerX + Math.cos(angle) * 30 * audioIntensity,
+            centerY + Math.sin(angle) * 30 * audioIntensity,
+            radius,
+            0,
+            Math.PI * 2
+        );
+        
+        const hue = (Date.now() * 0.05 + i * 60) % 360;
+        ctx.strokeStyle = `hsla(${hue}, 100%, 50%, ${0.05 + audioIntensity * 0.1})`;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+    }
+    
+    // Optimized kaleidoscope effect
+    ctx.save();
+    ctx.translate(centerX, centerY);
+    
+    for(let i = 0; i < 6; i++) {
+        ctx.save();
+        ctx.rotate((i / 6) * Math.PI * 2);
+        
+        // Simplified pattern
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        for(let j = 0; j < 50; j++) {
+            const t = j / 50 * Math.PI * 2;
+            const r = Math.sin(t * 3) * 30 * audioIntensity;
+            const x = r * Math.cos(t);
+            const y = r * Math.sin(t);
+            ctx.lineTo(x, y);
+        }
+        ctx.closePath();
+        
+        ctx.strokeStyle = `hsla(${(Date.now() * 0.03 + i * 45) % 360}, 100%, 70%, 0.2)`;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        
+        ctx.restore();
+    }
+    ctx.restore();
+}
+
 // Draw Matrix code background
 function drawMatrixBackground(){
-    ctx.fillStyle='rgba(0,0,0,0.05)';
-    ctx.fillRect(0,0,canvas.width,canvas.height);
-
     ctx.font=`${fontSize}px monospace`;
     ctx.textAlign='center';
     for(let i=0;i<drops.length;i++){
@@ -296,11 +395,14 @@ function drawWaveform(audioIntensity){
     ctx.fill();
 }
 
-// Main draw function
+// Main draw function with 120fps optimization
 function drawVisualizer(timestamp){
     if(!analyzer||!isVisualizing) return;
     const delta=timestamp-lastFrameTime; 
-    if(delta<16.67){animationFrameId=requestAnimationFrame(drawVisualizer);return;}
+    if(delta<8.33){ // 120fps target (1000ms/120 ≈ 8.33ms)
+        animationFrameId=requestAnimationFrame(drawVisualizer);
+        return;
+    }
     lastFrameTime=timestamp;
     const intensity=parseFloat(intensitySlider.value);
     const bufferLength=analyzer.frequencyBinCount; 
@@ -324,7 +426,8 @@ function drawVisualizer(timestamp){
     face.baseRadius=Math.min(canvas.width,canvas.height)*0.25;
     
     // DRAW ORDER:
-    drawMatrixBackground();  // Background matrix
+    drawMilkDropBackground(audioIntensity); // Background effects
+    drawMatrixBackground();  // Matrix code over background
     drawCodeFace(audioIntensity);  // Face in center
     drawWaveform(audioIntensity);  // RGB waveform at bottom
     
