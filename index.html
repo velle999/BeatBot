@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Matrix Code Face Visualizer</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+body{overflow:hidden;background:#000;color:white;height:100vh;font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;}
+header{padding:15px 20px;background:rgba(0,0,0,0.85);border-bottom:1px solid rgba(255,255,255,0.1);display:flex;justify-content:space-between;align-items:center;z-index:100;position:relative;flex-wrap:wrap;transition:transform 0.3s ease;}
+header.hidden{transform:translateY(-120%);}
+h1{font-size:1.8rem;background:linear-gradient(45deg,#00cc00,#00ff00,#00cc00,#00ff00);-webkit-background-clip:text;background-clip:text;color:transparent;font-weight:700;}
+.controls{display:flex;gap:12px;align-items:center;flex-wrap:wrap;}
+button{background: linear-gradient(45deg,#2c2c3a,#1a1a25); color:white; border:1px solid rgba(0,255,0,0.15); padding:8px 16px; border-radius:30px; cursor:pointer; font-family:inherit; font-weight:500; transition:all 0.2s; display:flex; align-items:center; gap:8px;}
+button:hover:not(:disabled){transform:translateY(-1px); box-shadow:0 0 10px rgba(0,255,0,0.5);}
+button:active:not(:disabled){transform:translateY(1px);}
+button.primary{background: linear-gradient(45deg,#006600,#00cc00);border:none;}
+button.danger{background: linear-gradient(45deg,#ff416c,#ff4b2b);}
+button:disabled{opacity:0.6; cursor:not-allowed; transform:none;}
+.mode-indicator{padding:4px 12px;border-radius:20px;font-size:0.85rem;font-weight:500;background:rgba(0,100,0,0.15);border:1px solid rgba(0,255,0,0.3); color:#00ff00;}
+.mode-mic{background: rgba(0,255,0,0.15); border-color: rgba(0,255,0,0.4);}
+.mode-tab{background: rgba(0,200,0,0.15); border-color: rgba(0,200,0,0.4);}
+canvas{display:block;position:absolute;top:0;left:0;width:100%;height:100%;z-index:1;}
+.overlay{position:absolute;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.92);z-index:10;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;padding:20px;transition:opacity 0.4s ease;}
+.overlay.hidden{opacity:0;pointer-events:none;}
+.overlay h2{font-size:3.2rem;margin-bottom:20px;background:linear-gradient(45deg,#00cc00,#00ff00,#00cc00,#00ff00);-webkit-background-clip:text;background-clip:text;color:transparent;text-shadow:0 0 15px rgba(0,255,0,0.6);}
+.instructions{background: rgba(0,20,0,0.85); border:1px solid rgba(0,255,0,0.3); border-radius:15px; padding:25px; max-width:650px; margin:20px;}
+.instructions h3{color:#00ff00;margin-bottom:15px; display:flex;align-items:center; gap:10px; justify-content:center;}
+.instructions ul{ text-align:left; padding-left:25px; margin-top:10px; line-height:1.6; color:#00cc00;}
+.instructions li{margin-bottom:8px;}
+.browser-warning{background: rgba(40,20,20,0.8); border:1px solid rgba(255,100,100,0.4); border-radius:12px; padding:18px; margin-top:25px; max-width:600px; color:#ff4444;}
+footer{position:absolute; bottom:20px; width:100%; text-align:center; z-index:20; color:rgba(0,255,0,0.6); font-size:0.9rem; padding:0 20px;}
+.slider-container, .selector-container{margin:5px; display:flex; align-items:center; gap:8px; color:#00cc00;}
+input[type=range]{cursor:pointer;}
+select{cursor:pointer; border-radius:12px; padding:5px 10px; background:rgba(0,30,0,0.9); color:#00ff00; border:1px solid rgba(0,255,0,0.2);}
+@media(max-width:768px){ .controls{flex-direction:column;align-items:stretch;gap:10px;} .overlay h2{font-size:2.3rem;} button{width:100%;justify-content:center;} }
+</style>
+</head>
+<body>
+<header>
+<h1>BeatBot</h1>
+<div class="controls">
+<div class="mode-indicator" id="modeIndicator">No Audio Source</div>
+<button id="micButton" class="primary">🎤 Microphone</button>
+<button id="tabButton">🖥️ Tab Audio</button>
+<button id="stopButton" class="danger" disabled>⏹️ Stop</button>
+<div class="slider-container">Sensitivity: <input type="range" id="intensitySlider" min="0" max="2" step="0.01" value="1"></div>
+<button id="toggleMenuButton">👁️ Hide Menu</button>
+</div>
+</header>
+
+<canvas id="visualizer"></canvas>
+
+<div class="overlay" id="welcomeOverlay">
+<h2>BeatBot</h2>
+<div class="instructions">
+<h3>How to Use</h3>
+<ul>
+<li><strong>Microphone:</strong> Face pulsates with your voice</li>
+<li><strong>Tab Audio:</strong> Face responds to music/video in other tabs</li>
+<li>Adjust sensitivity slider to control pulse intensity</li>
+<li>Watch the code face pulse and morph with the beat</li>
+<li>Eyes and mouth open with audio intensity</li>
+</ul>
+</div>
+<div class="browser-warning">⚠️ Tab audio requires Chrome/Edge; browsers cannot access system audio directly.</div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded',()=>{
+const canvas=document.getElementById('visualizer'), ctx=canvas.getContext('2d',{alpha:false});
+const welcomeOverlay=document.getElementById('welcomeOverlay');
+const micButton=document.getElementById('micButton');
+const tabButton=document.getElementById('tabButton');
+const stopButton=document.getElementById('stopButton');
+const modeIndicator=document.getElementById('modeIndicator');
+const intensitySlider=document.getElementById('intensitySlider');
+const toggleMenuButton=document.getElementById('toggleMenuButton');
+const header=document.querySelector('header');
+let menuHidden=false;
+
+toggleMenuButton.addEventListener('click',()=>{
+    menuHidden=!menuHidden;
+    header.classList.toggle('hidden',menuHidden);
+    toggleMenuButton.textContent=menuHidden?'👁️ Show Menu':'👁️ Hide Menu';
+});
+
+function resizeCanvas(){canvas.width=window.innerWidth; canvas.height=window.innerHeight;}
+window.addEventListener('resize',resizeCanvas); resizeCanvas();
+
+const chars = "アァカサタナハマヤャラワガザダバパイィキシチニヒミリヰギジヂビピウゥクスツヌフムユュルグズブヅプエェケセテネヘメレヱゲゼデベペオォコソトノホモヨョロヲゴゾドボポヴッン0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+const fontSize = 14;
+const columns = Math.floor(canvas.width/fontSize);
+const drops = Array(columns).fill(0).map(()=>Math.floor(Math.random()*canvas.height/fontSize));
+
+const face = {
+    centerX:canvas.width/2,
+    centerY:canvas.height/2,
+    baseRadius:Math.min(canvas.width,canvas.height)*0.25,
+    currentRadius:Math.min(canvas.width,canvas.height)*0.25,
+    pulsePhase:0,
+    eyeRadius:0.15,
+    pupilRadius:0.05,
+    mouthWidth:0.3,
+    mouthHeight:0.1,
+    huePhase:0
+};
+
+// Draw Matrix code background
+function drawMatrixBackground(){
+    ctx.fillStyle='rgba(0,0,0,0.05)';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    ctx.font=`${fontSize}px monospace`;
+    ctx.textAlign='center';
+    for(let i=0;i<drops.length;i++){
+        const text=chars[Math.floor(Math.random()*chars.length)];
+        const x=i*fontSize;
+        const y=drops[i]*fontSize;
+        const hue=(face.huePhase*100+i*5)%360;
+        ctx.fillStyle=`hsl(${hue},100%,50%)`;
+        ctx.fillText(text,x,y);
+        drops[i]+=0.6;
+        if(y>canvas.height && Math.random()>0.975) drops[i]=0;
+    }
+}
+
+// Draw face
+function drawCodeFace(audioIntensity){
+    face.pulsePhase+=0.05;
+    face.huePhase+=audioIntensity*0.1;
+    const pulseFactor=1+Math.sin(face.pulsePhase)*0.1*audioIntensity;
+    face.currentRadius=face.baseRadius*pulseFactor;
+    
+    drawFaceBase(audioIntensity);
+    drawEyes(audioIntensity);
+    drawMouth(audioIntensity);
+}
+
+function drawFaceBase(audioIntensity){
+    const segments=50;
+    const angleStep=(Math.PI*2)/segments;
+    for(let i=0;i<segments;i++){
+        const angle=i*angleStep;
+        const x=face.centerX+Math.cos(angle)*face.currentRadius;
+        const y=face.centerY+Math.sin(angle)*face.currentRadius;
+        const char=chars[Math.floor(Math.random()*chars.length)];
+        const hue=(face.huePhase*360)%360;
+        ctx.font=`${fontSize}px monospace`;
+        ctx.fillStyle=`hsl(${hue},100%,${70+Math.random()*30}%)`;
+        ctx.textAlign='center';
+        ctx.textBaseline='middle';
+        ctx.fillText(char,x,y);
+    }
+    ctx.beginPath();
+    ctx.arc(face.centerX,face.centerY,face.currentRadius*0.95,0,Math.PI*2);
+    const hue=(face.huePhase*360)%360;
+    ctx.strokeStyle=`hsla(${hue},100%,50%,${0.2+audioIntensity*0.3})`;
+    ctx.lineWidth=2;
+    ctx.stroke();
+}
+
+function drawEye(x,y,eyeSize,pupilSize,audioIntensity){
+    const segments=15;
+    const angleStep=(Math.PI*2)/segments;
+    for(let i=0;i<segments;i++){
+        const angle=i*angleStep;
+        const px=x+Math.cos(angle)*(face.currentRadius*eyeSize);
+        const py=y+Math.sin(angle)*(face.currentRadius*eyeSize);
+        const char=chars[Math.floor(Math.random()*chars.length)];
+        const hue=(face.huePhase*360)%360;
+        ctx.font=`${fontSize*0.8}px monospace`;
+        ctx.fillStyle=`hsl(${hue},100%,${80+Math.random()*20}%)`;
+        ctx.textAlign='center';
+        ctx.textBaseline='middle';
+        ctx.fillText(char,px,py);
+    }
+    ctx.beginPath();
+    ctx.arc(x,y,face.currentRadius*pupilSize,0,Math.PI*2);
+    ctx.fillStyle='#000'; ctx.fill();
+    ctx.beginPath();
+    ctx.arc(x-face.currentRadius*pupilSize*0.3,y-face.currentRadius*pupilSize*0.3,face.currentRadius*pupilSize*0.3,0,Math.PI*2);
+    ctx.fillStyle='#fff'; ctx.fill();
+}
+
+function drawEyes(audioIntensity){
+    const eyeSize=face.eyeRadius*(1+audioIntensity*0.5);
+    const pupilSize=face.pupilRadius*(1+audioIntensity*0.3);
+    const leftEyeX=face.centerX-face.currentRadius*0.3;
+    const rightEyeX=face.centerX+face.currentRadius*0.3;
+    const eyeY=face.centerY-face.currentRadius*0.2;
+    drawEye(leftEyeX,eyeY,eyeSize,pupilSize,audioIntensity);
+    drawEye(rightEyeX,eyeY,eyeSize,pupilSize,audioIntensity);
+}
+
+function drawMouth(audioIntensity){
+    const mouthOpenness=face.mouthHeight*(1+audioIntensity*2);
+    const mouthX=face.centerX;
+    const mouthY=face.centerY+face.currentRadius*0.3;
+    ctx.beginPath();
+    ctx.roundRect(mouthX-(face.currentRadius*face.mouthWidth)/2,mouthY,face.currentRadius*face.mouthWidth,mouthOpenness,5);
+    const hue=(face.huePhase*360)%360;
+    ctx.fillStyle=`hsl(${hue},100%,${70+audioIntensity*30}%)`;
+    ctx.fill();
+    ctx.strokeStyle=`hsl(${hue},100%,50%)`;
+    ctx.lineWidth=2;
+    ctx.stroke();
+    const mouthSegments=8;
+    for(let i=0;i<mouthSegments;i++){
+        const charX=mouthX-(face.currentRadius*face.mouthWidth)/2+(i+1)*(face.currentRadius*face.mouthWidth)/(mouthSegments+1);
+        const charY=mouthY+mouthOpenness/2;
+        const char=chars[Math.floor(Math.random()*chars.length)];
+        ctx.font=`${fontSize*0.7}px monospace`;
+        ctx.fillStyle=`hsl(${hue},100%,${50+Math.random()*50}%)`;
+        ctx.textAlign='center'; ctx.textBaseline='middle';
+        ctx.fillText(char,charX,charY);
+    }
+}
+
+// RGB reactive waveform at bottom
+function drawWaveform(audioIntensity){
+    if(!analyzer) return;
+    
+    const fftSize = analyzer.fftSize;
+    const timeData = new Uint8Array(fftSize);
+    analyzer.getByteTimeDomainData(timeData);
+    
+    // Position at absolute bottom
+    const width = canvas.width;
+    const height = canvas.height;
+    const bottomY = height - 10; // As low as possible
+    const amplitude = height * 0.5 * audioIntensity;
+    
+    // Draw RGB gradient waveform
+    for(let channel = 0; channel < 3; channel++) {
+        const colors = ['red', 'green', 'blue'];
+        const offset = channel * 2;
+        
+        ctx.beginPath();
+        
+        for(let i = 0; i < width; i++) {
+            const dataIndex = Math.floor((i / width) * (fftSize - 1));
+            const safeIndex = Math.min(Math.max(0, dataIndex), fftSize - 1);
+            const value = timeData[safeIndex];
+            
+            // Apply channel-specific offset for RGB effect
+            const normalized = (value - 128) / 128;
+            const y = bottomY + normalized * amplitude + offset;
+            
+            if(i === 0) {
+                ctx.moveTo(i, y);
+            } else {
+                ctx.lineTo(i, y);
+            }
+        }
+        
+        // Create color gradient for this channel
+        const gradient = ctx.createLinearGradient(0, bottomY - amplitude, width, bottomY + amplitude);
+        gradient.addColorStop(0, `rgba(255, 0, 0, 0.8)`);
+        gradient.addColorStop(0.33, `rgba(0, 255, 0, 0.8)`);
+        gradient.addColorStop(0.66, `rgba(0, 0, 255, 0.8)`);
+        gradient.addColorStop(1, `rgba(255, 0, 255, 0.8)`);
+        
+        ctx.strokeStyle = gradient;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+    }
+    
+    // Add filled area under waveform
+    ctx.beginPath();
+    for(let i = 0; i < width; i++) {
+        const dataIndex = Math.floor((i / width) * (fftSize - 1));
+        const safeIndex = Math.min(Math.max(0, dataIndex), fftSize - 1);
+        const value = timeData[safeIndex];
+        const normalized = (value - 128) / 128;
+        const y = bottomY + normalized * amplitude;
+        
+        if(i === 0) {
+            ctx.moveTo(i, bottomY);
+            ctx.lineTo(i, y);
+        } else {
+            ctx.lineTo(i, y);
+        }
+    }
+    ctx.lineTo(width, bottomY);
+    ctx.closePath();
+    
+    // RGB gradient fill
+    const fillGradient = ctx.createLinearGradient(0, bottomY - amplitude, 0, bottomY);
+    fillGradient.addColorStop(0, `rgba(255, 0, 0, 0.1)`);
+    fillGradient.addColorStop(0.33, `rgba(0, 255, 0, 0.1)`);
+    fillGradient.addColorStop(0.66, `rgba(0, 0, 255, 0.1)`);
+    fillGradient.addColorStop(1, `rgba(255, 0, 255, 0.1)`);
+    
+    ctx.fillStyle = fillGradient;
+    ctx.fill();
+}
+
+// Main draw function
+function drawVisualizer(timestamp){
+    if(!analyzer||!isVisualizing) return;
+    const delta=timestamp-lastFrameTime; 
+    if(delta<16.67){animationFrameId=requestAnimationFrame(drawVisualizer);return;}
+    lastFrameTime=timestamp;
+    const intensity=parseFloat(intensitySlider.value);
+    const bufferLength=analyzer.frequencyBinCount; 
+    const freqData=new Uint8Array(bufferLength); 
+    analyzer.getByteFrequencyData(freqData);
+    
+    let sumLow = 0, sumMid = 0, sumHigh = 0;
+    for(let i=0; i<bufferLength; i++){
+        if(i < bufferLength*0.2) sumLow += freqData[i];
+        else if(i < bufferLength*0.6) sumMid += freqData[i];
+        else sumHigh += freqData[i];
+    }
+    const avgLow = sumLow / (bufferLength*0.2);
+    const avgMid = sumMid / (bufferLength*0.4);
+    const avgHigh = sumHigh / (bufferLength*0.4);
+    
+    const audioIntensity = Math.min(1, (avgLow*0.5 + avgMid*0.3 + avgHigh*0.2) / 255) * intensity;
+    
+    face.centerX=canvas.width/2;
+    face.centerY=canvas.height/2;
+    face.baseRadius=Math.min(canvas.width,canvas.height)*0.25;
+    
+    // DRAW ORDER:
+    drawMatrixBackground();  // Background matrix
+    drawCodeFace(audioIntensity);  // Face in center
+    drawWaveform(audioIntensity);  // RGB waveform at bottom
+    
+    animationFrameId=requestAnimationFrame(drawVisualizer);
+}
+
+// Audio setup
+let audioContext=null, analyzer=null, sourceNode=null, stream=null;
+let animationFrameId=null, isVisualizing=false;
+const FFT_SIZE=1024, SMOOTHING=0.85;
+let lastFrameTime=performance.now();
+
+async function setupMicrophone(){
+    try{
+        stopVisualization();
+        stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
+        setupAudioContext(stream); 
+        modeIndicator.textContent='Microphone Active'; 
+        modeIndicator.className='mode-indicator mode-mic';
+        micButton.disabled=true; tabButton.disabled=true; stopButton.disabled=false;
+        welcomeOverlay.classList.add('hidden'); isVisualizing=true;
+        animationFrameId=requestAnimationFrame(drawVisualizer);
+    }catch(err){
+        console.error(err); alert('Mic error: '+(err.message||err.name));
+        modeIndicator.textContent='Mic Error'; micButton.disabled=false; tabButton.disabled=false;
+    }
+}
+
+async function setupTabAudio(){
+    try{
+        stopVisualization();
+        if(!navigator.mediaDevices.getDisplayMedia) throw new Error('Tab audio only works in Chrome/Edge');
+        stream=await navigator.mediaDevices.getDisplayMedia({audio:true,video:true});
+        const videoTrack=stream.getVideoTracks()[0]; if(videoTrack) videoTrack.onended=()=>stopVisualization();
+        setupAudioContext(stream);
+        modeIndicator.textContent='Tab Audio Active'; 
+        modeIndicator.className='mode-indicator mode-tab';
+        micButton.disabled=true; tabButton.disabled=true; stopButton.disabled=false;
+        welcomeOverlay.classList.add('hidden'); isVisualizing=true;
+        animationFrameId=requestAnimationFrame(drawVisualizer);
+    }catch(err){
+        console.error(err); 
+        if(err.name==='NotAllowedError'||err.name==='AbortError') alert('You cancelled the tab selection.');
+        else alert('Tab audio error: '+(err.message||err.name));
+        modeIndicator.textContent='Tab Audio Error'; micButton.disabled=false; tabButton.disabled=false;
+    }
+}
+
+function setupAudioContext(stream){
+    if(!audioContext||audioContext.state==='closed') audioContext=new (window.AudioContext||window.webkitAudioContext)();
+    if(audioContext.state==='suspended') audioContext.resume();
+    analyzer=audioContext.createAnalyser();
+    analyzer.fftSize=FFT_SIZE; analyzer.smoothingTimeConstant=SMOOTHING;
+    sourceNode=audioContext.createMediaStreamSource(stream); sourceNode.connect(analyzer);
+}
+
+function stopVisualization(){
+    isVisualizing=false;
+    if(animationFrameId) cancelAnimationFrame(animationFrameId);
+    if(sourceNode) sourceNode.disconnect(); sourceNode=null;
+    if(analyzer) analyzer.disconnect(); analyzer=null;
+    if(audioContext){audioContext.close(); audioContext=null;}
+    if(stream){stream.getTracks().forEach(t=>t.stop()); stream=null;}
+    micButton.disabled=false; tabButton.disabled=false; stopButton.disabled=true;
+    modeIndicator.textContent='No Audio Source'; modeIndicator.className='mode-indicator';
+}
+
+micButton.addEventListener('click',setupMicrophone);
+tabButton.addEventListener('click',setupTabAudio);
+stopButton.addEventListener('click',stopVisualization);
+
+});
+</script>
+</body>
+</html>
