@@ -90,8 +90,13 @@ window.addEventListener('resize',resizeCanvas); resizeCanvas();
 
 const chars = "アァカサタナハマヤャラワガザダバパイィキシチニヒミリヰギジヂビピウゥクスツヌフムユュルグズブヅプエェケセテネヘメレヱゲゼデベペオォコソトノホモヨョロヲゴゾドボポヴッン0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 const fontSize = 14;
-const columns = Math.floor(canvas.width/fontSize);
-const drops = Array(columns).fill(0).map(()=>Math.floor(Math.random()*canvas.height/fontSize));
+let columns = Math.floor(canvas.width/fontSize);
+let drops = Array(columns).fill(0).map(()=>Math.floor(Math.random()*canvas.height/fontSize));
+
+window.addEventListener('resize', () => {
+    columns = Math.floor(canvas.width/fontSize);
+    drops = Array(columns).fill(0).map(()=>Math.floor(Math.random()*canvas.height/fontSize));
+});
 
 const face = {
     centerX:canvas.width/2,
@@ -103,13 +108,103 @@ const face = {
     pupilRadius:0.05,
     mouthWidth:0.3,
     mouthHeight:0.1,
-    huePhase:0
+    huePhase:0,
+    // Enhanced face state
+    browAngle: 0,
+    browTarget: 0,
+    squintAmount: 0,
+    squintTarget: 0,
+    emotionState: 0, // 0=neutral, smoothly transitions
+    emotionTarget: 0,
+    pupilOffsetX: 0,
+    pupilOffsetY: 0,
+    pupilTargetX: 0,
+    pupilTargetY: 0,
+    blushIntensity: 0,
+    blushTarget: 0,
+    jawDrop: 0,
+    jawTarget: 0,
+    tongueOut: 0,
+    tongueTarget: 0,
+    headTilt: 0,
+    headTiltTarget: 0,
+    breathPhase: 0,
+    lastBeatTime: 0,
+    beatCount: 0,
+    irisRotation: 0,
+    noseFlare: 0,
+    noseFlareTarget: 0,
+    forheadCrease: 0,
+    forheadCreaseTarget: 0,
+    smileAmount: 0,
+    smileTarget: 0,
+    teethShow: 0,
+    teethShowTarget: 0,
+    glowPulse: 0,
+    shakeX: 0,
+    shakeY: 0,
+    lastPeakIntensity: 0,
+    smoothIntensity: 0,
 };
 
-// Optimized particle system
-const particles = [];
-const particleCount = 100; // Reduced for performance
+// Face particle system - particles that emanate from face edges
+const faceParticles = [];
+const MAX_FACE_PARTICLES = 200;
 
+function spawnFaceParticle(x, y, audioIntensity) {
+    if (faceParticles.length >= MAX_FACE_PARTICLES) return;
+    const angle = Math.atan2(y - face.centerY, x - face.centerX);
+    const speed = 1 + audioIntensity * 4;
+    const hue = (face.huePhase * 360) % 360;
+    faceParticles.push({
+        x, y,
+        vx: Math.cos(angle) * speed + (Math.random() - 0.5) * 2,
+        vy: Math.sin(angle) * speed + (Math.random() - 0.5) * 2,
+        life: 1,
+        decay: 0.01 + Math.random() * 0.03,
+        size: 1 + Math.random() * 3 * audioIntensity,
+        hue: hue + (Math.random() - 0.5) * 60,
+        char: chars[Math.floor(Math.random() * chars.length)],
+        isChar: Math.random() > 0.5,
+        rotation: Math.random() * Math.PI * 2
+    });
+}
+
+function updateFaceParticles(audioIntensity) {
+    for (let i = faceParticles.length - 1; i >= 0; i--) {
+        const p = faceParticles[i];
+        p.x += p.vx;
+        p.y += p.vy;
+        p.vy += 0.02; // slight gravity
+        p.life -= p.decay;
+        p.rotation += 0.05;
+        if (p.life <= 0) {
+            faceParticles.splice(i, 1);
+            continue;
+        }
+        const alpha = p.life * 0.8;
+        if (p.isChar) {
+            ctx.save();
+            ctx.translate(p.x, p.y);
+            ctx.rotate(p.rotation);
+            ctx.font = `${fontSize * p.size * 0.5}px monospace`;
+            ctx.fillStyle = `hsla(${p.hue % 360}, 100%, 70%, ${alpha})`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(p.char, 0, 0);
+            ctx.restore();
+        } else {
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
+            ctx.fillStyle = `hsla(${p.hue % 360}, 100%, 70%, ${alpha})`;
+            ctx.fill();
+        }
+    }
+}
+
+// Background particles
+const particles = [];
+const particleCount = 100;
 for(let i = 0; i < particleCount; i++) {
     particles.push({
         x: Math.random() * canvas.width,
@@ -123,92 +218,156 @@ for(let i = 0; i < particleCount; i++) {
     });
 }
 
-// Optimized MilkDrop-inspired background
+// Smooth interpolation helper
+function lerp(a, b, t) { return a + (b - a) * t; }
+
+// Update face emotion/expression state based on audio
+function updateFaceState(audioIntensity, lowFreq, midFreq, highFreq) {
+    const now = performance.now();
+    const dt = 0.016; // ~60fps timestep for smooth interpolation
+
+    // Smooth intensity tracking
+    face.smoothIntensity = lerp(face.smoothIntensity, audioIntensity, 0.15);
+
+    // Beat detection - look for sudden intensity spikes
+    const isBeat = audioIntensity > face.lastPeakIntensity * 1.3 && audioIntensity > 0.3;
+    if (isBeat && now - face.lastBeatTime > 150) {
+        face.lastBeatTime = now;
+        face.beatCount++;
+        // Screen shake on big beats
+        face.shakeX = (Math.random() - 0.5) * audioIntensity * 15;
+        face.shakeY = (Math.random() - 0.5) * audioIntensity * 15;
+        // Spawn burst of particles on beat
+        for (let i = 0; i < 8; i++) {
+            const angle = (i / 8) * Math.PI * 2;
+            const px = face.centerX + Math.cos(angle) * face.currentRadius;
+            const py = face.centerY + Math.sin(angle) * face.currentRadius;
+            spawnFaceParticle(px, py, audioIntensity);
+        }
+    }
+    face.lastPeakIntensity = lerp(face.lastPeakIntensity, audioIntensity, 0.1);
+
+    // Decay shake
+    face.shakeX *= 0.85;
+    face.shakeY *= 0.85;
+
+    // Breathing
+    face.breathPhase += 0.02;
+
+    // Eyebrow movement - raise with high frequencies, furrow with bass
+    if (highFreq > 0.5) {
+        face.browTarget = -0.3 * highFreq; // raised (surprised)
+    } else if (lowFreq > 0.6) {
+        face.browTarget = 0.2 * lowFreq; // furrowed (intense)
+    } else {
+        face.browTarget = 0;
+    }
+    face.browAngle = lerp(face.browAngle, face.browTarget, 0.1);
+
+    // Squint with mid frequencies
+    face.squintTarget = midFreq > 0.4 ? midFreq * 0.3 : 0;
+    face.squintAmount = lerp(face.squintAmount, face.squintTarget, 0.08);
+
+    // Pupil wandering - follows frequency balance
+    face.pupilTargetX = (highFreq - lowFreq) * 0.3;
+    face.pupilTargetY = (midFreq - 0.3) * 0.2;
+    face.pupilOffsetX = lerp(face.pupilOffsetX, face.pupilTargetX, 0.05);
+    face.pupilOffsetY = lerp(face.pupilOffsetY, face.pupilTargetY, 0.05);
+
+    // Blush on sustained mid-range
+    face.blushTarget = midFreq > 0.5 ? midFreq * 0.5 : 0;
+    face.blushIntensity = lerp(face.blushIntensity, face.blushTarget, 0.03);
+
+    // Jaw drop with bass
+    face.jawTarget = lowFreq * 0.8;
+    face.jawDrop = lerp(face.jawDrop, face.jawTarget, 0.15);
+
+    // Tongue peeks out at very high intensity
+    face.tongueTarget = audioIntensity > 0.7 ? (audioIntensity - 0.7) * 3 : 0;
+    face.tongueOut = lerp(face.tongueOut, face.tongueTarget, 0.08);
+
+    // Head tilt follows stereo balance (simulated)
+    face.headTiltTarget = Math.sin(now * 0.001) * audioIntensity * 0.1;
+    face.headTilt = lerp(face.headTilt, face.headTiltTarget, 0.05);
+
+    // Iris rotation
+    face.irisRotation += 0.02 + audioIntensity * 0.1;
+
+    // Nose flare with intensity
+    face.noseFlareTarget = audioIntensity > 0.4 ? audioIntensity * 0.5 : 0;
+    face.noseFlare = lerp(face.noseFlare, face.noseFlareTarget, 0.1);
+
+    // Forehead creases with high intensity
+    face.forheadCreaseTarget = audioIntensity > 0.6 ? (audioIntensity - 0.6) * 2.5 : 0;
+    face.forheadCrease = lerp(face.forheadCrease, face.forheadCreaseTarget, 0.08);
+
+    // Smile - triggered by pleasant mid-range
+    face.smileTarget = midFreq > 0.3 && audioIntensity < 0.7 ? midFreq * 0.6 : 0;
+    face.smileAmount = lerp(face.smileAmount, face.smileTarget, 0.05);
+
+    // Teeth visibility
+    face.teethShowTarget = face.jawDrop > 0.3 ? (face.jawDrop - 0.3) * 2 : 0;
+    face.teethShow = lerp(face.teethShow, face.teethShowTarget, 0.1);
+
+    // Glow pulse
+    face.glowPulse = 0.3 + audioIntensity * 0.7;
+}
+
+// MilkDrop background
 function drawMilkDropBackground(audioIntensity) {
-    // Fading trail effect
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.05)';
+    ctx.fillStyle = `rgba(0, 0, 0, ${0.08 - audioIntensity * 0.03})`;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    
-    // Draw particles with optimized logic
+
     for(const p of particles) {
-        // Apply audio-based movement
         p.x += p.speedX + (Math.random() - 0.5) * audioIntensity * 0.5;
         p.y += p.speedY + (Math.random() - 0.5) * audioIntensity * 0.5;
-        
-        // Boundary checks
         if(p.x < 0 || p.x > canvas.width) p.speedX *= -1;
         if(p.y < 0 || p.y > canvas.height) p.speedY *= -1;
-        
-        // Life cycle
         p.life -= 0.001;
-        if(p.life <= 0) {
-            p.x = Math.random() * canvas.width;
-            p.y = Math.random() * canvas.height;
-            p.life = 1;
-        }
-        
-        // Draw particle
+        if(p.life <= 0) { p.x = Math.random() * canvas.width; p.y = Math.random() * canvas.height; p.life = 1; }
         ctx.beginPath();
         ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
         ctx.fillStyle = `hsla(${p.hue % 360}, 85%, 65%, ${p.alpha * p.life})`;
         ctx.fill();
     }
-    
-    // Optimized swirling patterns
-    const swirlCount = 4;
+
     const centerX = canvas.width / 2;
     const centerY = canvas.height / 2;
     const baseRadius = Math.min(canvas.width, canvas.height) * 0.3;
-    
-    for(let i = 0; i < swirlCount; i++) {
-        const angle = (i / swirlCount) * Math.PI * 2;
+
+    for(let i = 0; i < 4; i++) {
+        const angle = (i / 4) * Math.PI * 2;
         const radius = baseRadius + i * 15 + Math.sin(Date.now() * 0.002 + i) * 20 * audioIntensity;
-        
         ctx.beginPath();
-        ctx.arc(
-            centerX + Math.cos(angle) * 30 * audioIntensity,
-            centerY + Math.sin(angle) * 30 * audioIntensity,
-            radius,
-            0,
-            Math.PI * 2
-        );
-        
+        ctx.arc(centerX + Math.cos(angle) * 30 * audioIntensity, centerY + Math.sin(angle) * 30 * audioIntensity, radius, 0, Math.PI * 2);
         const hue = (Date.now() * 0.05 + i * 60) % 360;
         ctx.strokeStyle = `hsla(${hue}, 100%, 50%, ${0.05 + audioIntensity * 0.1})`;
         ctx.lineWidth = 1.5;
         ctx.stroke();
     }
-    
-    // Optimized kaleidoscope effect
+
     ctx.save();
     ctx.translate(centerX, centerY);
-    
     for(let i = 0; i < 6; i++) {
         ctx.save();
         ctx.rotate((i / 6) * Math.PI * 2);
-        
-        // Simplified pattern
         ctx.beginPath();
         ctx.moveTo(0, 0);
         for(let j = 0; j < 50; j++) {
             const t = j / 50 * Math.PI * 2;
             const r = Math.sin(t * 3) * 30 * audioIntensity;
-            const x = r * Math.cos(t);
-            const y = r * Math.sin(t);
-            ctx.lineTo(x, y);
+            ctx.lineTo(r * Math.cos(t), r * Math.sin(t));
         }
         ctx.closePath();
-        
         ctx.strokeStyle = `hsla(${(Date.now() * 0.03 + i * 45) % 360}, 100%, 70%, 0.2)`;
         ctx.lineWidth = 1;
         ctx.stroke();
-        
         ctx.restore();
     }
     ctx.restore();
 }
 
-// Draw Matrix code background
+// Matrix background
 function drawMatrixBackground(){
     ctx.font=`${fontSize}px monospace`;
     ctx.textAlign='center';
@@ -224,281 +383,709 @@ function drawMatrixBackground(){
     }
 }
 
-// Draw face
-function drawCodeFace(audioIntensity){
-    face.pulsePhase+=0.05;
-    face.huePhase+=audioIntensity*0.1;
-    const pulseFactor=1+Math.sin(face.pulsePhase)*0.1*audioIntensity;
-    face.currentRadius=face.baseRadius*pulseFactor;
-    
+// ============= ENHANCED FACE DRAWING =============
+
+function drawFaceGlow(audioIntensity) {
+    const hue = (face.huePhase * 360) % 360;
+    const glowRadius = face.currentRadius * (1.3 + audioIntensity * 0.5);
+
+    // Multi-layered glow aura
+    for (let i = 3; i >= 0; i--) {
+        const r = glowRadius * (1 + i * 0.15);
+        const alpha = (0.03 + audioIntensity * 0.05) * (1 - i * 0.2);
+        const gradient = ctx.createRadialGradient(
+            face.centerX, face.centerY, face.currentRadius * 0.5,
+            face.centerX, face.centerY, r
+        );
+        gradient.addColorStop(0, `hsla(${hue}, 100%, 60%, ${alpha})`);
+        gradient.addColorStop(0.5, `hsla(${(hue + 30) % 360}, 100%, 50%, ${alpha * 0.5})`);
+        gradient.addColorStop(1, `hsla(${(hue + 60) % 360}, 100%, 40%, 0)`);
+        ctx.beginPath();
+        ctx.arc(face.centerX, face.centerY, r, 0, Math.PI * 2);
+        ctx.fillStyle = gradient;
+        ctx.fill();
+    }
+}
+
+function drawCodeFace(audioIntensity) {
+    face.pulsePhase += 0.05;
+    face.huePhase += audioIntensity * 0.1;
+    const breathPulse = Math.sin(face.breathPhase) * 0.02;
+    const pulseFactor = 1 + Math.sin(face.pulsePhase) * 0.1 * audioIntensity + breathPulse;
+    face.currentRadius = face.baseRadius * pulseFactor;
+
+    // Apply head shake and tilt
+    ctx.save();
+    ctx.translate(face.centerX + face.shakeX, face.centerY + face.shakeY);
+    ctx.rotate(face.headTilt);
+    ctx.translate(-(face.centerX), -(face.centerY));
+
+    drawFaceGlow(audioIntensity);
     drawFaceBase(audioIntensity);
+    drawForheadCreases(audioIntensity);
+    drawEyebrows(audioIntensity);
     drawEyes(audioIntensity);
+    drawNose(audioIntensity);
+    drawCheekBlush(audioIntensity);
     drawMouth(audioIntensity);
-}
+    drawChin(audioIntensity);
 
-function drawFaceBase(audioIntensity){
-    const segments=50;
-    const angleStep=(Math.PI*2)/segments;
-    for(let i=0;i<segments;i++){
-        const angle=i*angleStep;
-        const x=face.centerX+Math.cos(angle)*face.currentRadius;
-        const y=face.centerY+Math.sin(angle)*face.currentRadius;
-        const char=chars[Math.floor(Math.random()*chars.length)];
-        const hue=(face.huePhase*360)%360;
-        ctx.font=`${fontSize}px monospace`;
-        ctx.fillStyle=`hsl(${hue},100%,${70+Math.random()*30}%)`;
-        ctx.textAlign='center';
-        ctx.textBaseline='middle';
-        ctx.fillText(char,x,y);
+    ctx.restore();
+
+    // Face particles drawn outside transform
+    updateFaceParticles(audioIntensity);
+
+    // Continuously spawn subtle particles along face edge
+    if (audioIntensity > 0.1 && Math.random() < audioIntensity) {
+        const angle = Math.random() * Math.PI * 2;
+        const px = face.centerX + Math.cos(angle) * face.currentRadius * 0.95;
+        const py = face.centerY + Math.sin(angle) * face.currentRadius * 0.95;
+        spawnFaceParticle(px, py, audioIntensity * 0.5);
     }
-    ctx.beginPath();
-    ctx.arc(face.centerX,face.centerY,face.currentRadius*0.95,0,Math.PI*2);
-    const hue=(face.huePhase*360)%360;
-    ctx.strokeStyle=`hsla(${hue},100%,50%,${0.2+audioIntensity*0.3})`;
-    ctx.lineWidth=2;
-    ctx.stroke();
 }
 
-function drawEye(x,y,eyeSize,pupilSize,audioIntensity){
-    const segments=15;
-    const angleStep=(Math.PI*2)/segments;
-    for(let i=0;i<segments;i++){
-        const angle=i*angleStep;
-        const px=x+Math.cos(angle)*(face.currentRadius*eyeSize);
-        const py=y+Math.sin(angle)*(face.currentRadius*eyeSize);
-        const char=chars[Math.floor(Math.random()*chars.length)];
-        const hue=(face.huePhase*360)%360;
-        ctx.font=`${fontSize*0.8}px monospace`;
-        ctx.fillStyle=`hsl(${hue},100%,${80+Math.random()*20}%)`;
-        ctx.textAlign='center';
-        ctx.textBaseline='middle';
-        ctx.fillText(char,px,py);
-    }
-    ctx.beginPath();
-    ctx.arc(x,y,face.currentRadius*pupilSize,0,Math.PI*2);
-    ctx.fillStyle='#000'; ctx.fill();
-    ctx.beginPath();
-    ctx.arc(x-face.currentRadius*pupilSize*0.3,y-face.currentRadius*pupilSize*0.3,face.currentRadius*pupilSize*0.3,0,Math.PI*2);
-    ctx.fillStyle='#fff'; ctx.fill();
-}
+function drawFaceBase(audioIntensity) {
+    const hue = (face.huePhase * 360) % 360;
+    const r = face.currentRadius;
 
-function drawEyes(audioIntensity){
-    const eyeSize=face.eyeRadius*(1+audioIntensity*0.5);
-    const pupilSize=face.pupilRadius*(1+audioIntensity*0.3);
-    const leftEyeX=face.centerX-face.currentRadius*0.3;
-    const rightEyeX=face.centerX+face.currentRadius*0.3;
-    const eyeY=face.centerY-face.currentRadius*0.2;
-    drawEye(leftEyeX,eyeY,eyeSize,pupilSize,audioIntensity);
-    drawEye(rightEyeX,eyeY,eyeSize,pupilSize,audioIntensity);
-}
-
-function drawMouth(audioIntensity){
-    const mouthOpenness=face.mouthHeight*(1+audioIntensity*2);
-    const mouthX=face.centerX;
-    const mouthY=face.centerY+face.currentRadius*0.3;
+    // 3D shading - darker gradient on edges
+    const faceGrad = ctx.createRadialGradient(
+        face.centerX - r * 0.2, face.centerY - r * 0.2, r * 0.1,
+        face.centerX, face.centerY, r
+    );
+    faceGrad.addColorStop(0, `hsla(${hue}, 60%, 15%, 0.3)`);
+    faceGrad.addColorStop(0.7, `hsla(${hue}, 60%, 8%, 0.2)`);
+    faceGrad.addColorStop(1, `hsla(${hue}, 60%, 3%, 0.4)`);
     ctx.beginPath();
-    ctx.roundRect(mouthX-(face.currentRadius*face.mouthWidth)/2,mouthY,face.currentRadius*face.mouthWidth,mouthOpenness,5);
-    const hue=(face.huePhase*360)%360;
-    ctx.fillStyle=`hsl(${hue},100%,${70+audioIntensity*30}%)`;
+    ctx.arc(face.centerX, face.centerY, r * 0.95, 0, Math.PI * 2);
+    ctx.fillStyle = faceGrad;
     ctx.fill();
-    ctx.strokeStyle=`hsl(${hue},100%,50%)`;
-    ctx.lineWidth=2;
+
+    // Character ring around face - double ring for depth
+    const segments = 60;
+    const angleStep = (Math.PI * 2) / segments;
+    for (let ring = 0; ring < 2; ring++) {
+        const ringR = r * (0.98 + ring * 0.06);
+        const ringAlpha = ring === 0 ? 1 : 0.5;
+        for (let i = 0; i < segments; i++) {
+            const angle = i * angleStep + face.pulsePhase * 0.3 * (ring === 0 ? 1 : -1);
+            const wobble = Math.sin(angle * 3 + face.pulsePhase) * audioIntensity * 5;
+            const x = face.centerX + Math.cos(angle) * (ringR + wobble);
+            const y = face.centerY + Math.sin(angle) * (ringR + wobble);
+            const char = chars[Math.floor(Math.random() * chars.length)];
+            const charHue = (hue + i * 6) % 360;
+            ctx.font = `${fontSize * (0.8 + audioIntensity * 0.4)}px monospace`;
+            ctx.fillStyle = `hsla(${charHue}, 100%, ${70 + Math.random() * 30}%, ${ringAlpha})`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(char, x, y);
+        }
+    }
+
+    // Glowing outline
+    ctx.beginPath();
+    ctx.arc(face.centerX, face.centerY, r * 0.95, 0, Math.PI * 2);
+    ctx.strokeStyle = `hsla(${hue}, 100%, 50%, ${0.2 + audioIntensity * 0.4})`;
+    ctx.lineWidth = 2 + audioIntensity * 2;
+    ctx.shadowColor = `hsl(${hue}, 100%, 50%)`;
+    ctx.shadowBlur = 10 + audioIntensity * 20;
     ctx.stroke();
-    const mouthSegments=8;
-    for(let i=0;i<mouthSegments;i++){
-        const charX=mouthX-(face.currentRadius*face.mouthWidth)/2+(i+1)*(face.currentRadius*face.mouthWidth)/(mouthSegments+1);
-        const charY=mouthY+mouthOpenness/2;
-        const char=chars[Math.floor(Math.random()*chars.length)];
-        ctx.font=`${fontSize*0.7}px monospace`;
-        ctx.fillStyle=`hsl(${hue},100%,${50+Math.random()*50}%)`;
-        ctx.textAlign='center'; ctx.textBaseline='middle';
-        ctx.fillText(char,charX,charY);
+    ctx.shadowBlur = 0;
+}
+
+function drawForheadCreases(audioIntensity) {
+    if (face.forheadCrease < 0.05) return;
+    const hue = (face.huePhase * 360) % 360;
+    const r = face.currentRadius;
+    const creaseY = face.centerY - r * 0.55;
+
+    for (let i = 0; i < 3; i++) {
+        const y = creaseY + i * r * 0.06;
+        const width = r * (0.4 - i * 0.05);
+        ctx.beginPath();
+        ctx.moveTo(face.centerX - width, y);
+        // Wavy crease line
+        for (let x = -width; x <= width; x += 5) {
+            const wave = Math.sin(x * 0.05 + face.pulsePhase) * 2 * face.forheadCrease;
+            ctx.lineTo(face.centerX + x, y + wave);
+        }
+        ctx.strokeStyle = `hsla(${hue}, 80%, 60%, ${face.forheadCrease * 0.6})`;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
     }
 }
 
-// RGB reactive waveform at bottom
-function drawWaveform(audioIntensity){
-    if(!analyzer) return;
-    
+function drawEyebrows(audioIntensity) {
+    const hue = (face.huePhase * 360) % 360;
+    const r = face.currentRadius;
+    const browY = face.centerY - r * 0.38;
+    const browWidth = r * 0.2;
+    const browThickness = r * 0.035;
+
+    // Left eyebrow
+    ctx.save();
+    ctx.translate(face.centerX - r * 0.3, browY);
+    ctx.rotate(face.browAngle - 0.05);
+
+    // Thick stylized brow made of characters
+    for (let i = 0; i < 6; i++) {
+        const x = -browWidth + (i / 5) * browWidth * 2;
+        const archY = -Math.sin((i / 5) * Math.PI) * browThickness * 2;
+        const char = chars[Math.floor(Math.random() * chars.length)];
+        ctx.font = `bold ${fontSize * 1.1}px monospace`;
+        ctx.fillStyle = `hsla(${hue}, 100%, ${75 + audioIntensity * 25}%, 0.9)`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(char, x, archY);
+    }
+    // Brow line
+    ctx.beginPath();
+    ctx.moveTo(-browWidth, 0);
+    ctx.quadraticCurveTo(0, -browThickness * 3, browWidth, browThickness * 0.5);
+    ctx.strokeStyle = `hsla(${hue}, 100%, 70%, ${0.5 + audioIntensity * 0.3})`;
+    ctx.lineWidth = 2 + audioIntensity * 2;
+    ctx.shadowColor = `hsl(${hue}, 100%, 50%)`;
+    ctx.shadowBlur = 5 + audioIntensity * 10;
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.restore();
+
+    // Right eyebrow (mirrored)
+    ctx.save();
+    ctx.translate(face.centerX + r * 0.3, browY);
+    ctx.rotate(-face.browAngle + 0.05);
+
+    for (let i = 0; i < 6; i++) {
+        const x = -browWidth + (i / 5) * browWidth * 2;
+        const archY = -Math.sin((i / 5) * Math.PI) * browThickness * 2;
+        const char = chars[Math.floor(Math.random() * chars.length)];
+        ctx.font = `bold ${fontSize * 1.1}px monospace`;
+        ctx.fillStyle = `hsla(${hue}, 100%, ${75 + audioIntensity * 25}%, 0.9)`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(char, x, archY);
+    }
+    ctx.beginPath();
+    ctx.moveTo(-browWidth, browThickness * 0.5);
+    ctx.quadraticCurveTo(0, -browThickness * 3, browWidth, 0);
+    ctx.strokeStyle = `hsla(${hue}, 100%, 70%, ${0.5 + audioIntensity * 0.3})`;
+    ctx.lineWidth = 2 + audioIntensity * 2;
+    ctx.shadowColor = `hsl(${hue}, 100%, 50%)`;
+    ctx.shadowBlur = 5 + audioIntensity * 10;
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.restore();
+}
+
+function drawDetailedEye(x, y, eyeSize, pupilSize, audioIntensity, isLeft) {
+    const hue = (face.huePhase * 360) % 360;
+    const r = face.currentRadius;
+
+    // Eye socket shadow for 3D depth
+    const socketGrad = ctx.createRadialGradient(x, y, eyeSize * r * 0.3, x, y, eyeSize * r * 1.5);
+    socketGrad.addColorStop(0, 'rgba(0,0,0,0)');
+    socketGrad.addColorStop(1, `hsla(${hue}, 50%, 10%, 0.3)`);
+    ctx.beginPath();
+    ctx.arc(x, y, eyeSize * r * 1.3, 0, Math.PI * 2);
+    ctx.fillStyle = socketGrad;
+    ctx.fill();
+
+    // Squint effect - clip the eye vertically
+    const squintClip = face.squintAmount * eyeSize * r * 0.5;
+    ctx.save();
+    ctx.beginPath();
+    ctx.ellipse(x, y, eyeSize * r * 1.1, eyeSize * r * 1.1 - squintClip, 0, 0, Math.PI * 2);
+    ctx.clip();
+
+    // Eye white (sclera) - slight off-white glow
+    ctx.beginPath();
+    ctx.arc(x, y, eyeSize * r, 0, Math.PI * 2);
+    const scleraGrad = ctx.createRadialGradient(x - eyeSize * r * 0.2, y - eyeSize * r * 0.2, 0, x, y, eyeSize * r);
+    scleraGrad.addColorStop(0, `hsla(${hue}, 20%, 95%, 0.15)`);
+    scleraGrad.addColorStop(1, `hsla(${hue}, 30%, 70%, 0.1)`);
+    ctx.fillStyle = scleraGrad;
+    ctx.fill();
+
+    // Character ring around eye
+    const segments = 18;
+    const angleStep = (Math.PI * 2) / segments;
+    for (let i = 0; i < segments; i++) {
+        const angle = i * angleStep + face.irisRotation * (isLeft ? 1 : -1);
+        const px = x + Math.cos(angle) * (r * eyeSize * 0.9);
+        const py = y + Math.sin(angle) * (r * eyeSize * 0.9);
+        const char = chars[Math.floor(Math.random() * chars.length)];
+        ctx.font = `${fontSize * 0.7}px monospace`;
+        ctx.fillStyle = `hsla(${(hue + i * 20) % 360}, 100%, ${80 + Math.random() * 20}%, 0.8)`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(char, px, py);
+    }
+
+    // Iris - detailed with rings and color variation
+    const irisR = r * pupilSize * 2.5;
+    const pupilX = x + face.pupilOffsetX * irisR;
+    const pupilY = y + face.pupilOffsetY * irisR;
+
+    // Outer iris ring
+    for (let ring = 3; ring >= 0; ring--) {
+        const ringR = irisR * (0.6 + ring * 0.15);
+        const ringHue = (hue + ring * 25) % 360;
+        ctx.beginPath();
+        ctx.arc(pupilX, pupilY, ringR, 0, Math.PI * 2);
+        ctx.fillStyle = `hsla(${ringHue}, 100%, ${40 + ring * 10}%, ${0.3 + ring * 0.1})`;
+        ctx.fill();
+    }
+
+    // Iris fiber pattern
+    const fiberCount = 16;
+    for (let i = 0; i < fiberCount; i++) {
+        const fAngle = (i / fiberCount) * Math.PI * 2 + face.irisRotation;
+        ctx.beginPath();
+        ctx.moveTo(pupilX + Math.cos(fAngle) * irisR * 0.3, pupilY + Math.sin(fAngle) * irisR * 0.3);
+        ctx.lineTo(pupilX + Math.cos(fAngle) * irisR * 0.85, pupilY + Math.sin(fAngle) * irisR * 0.85);
+        ctx.strokeStyle = `hsla(${(hue + i * 15) % 360}, 100%, 60%, 0.3)`;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+    }
+
+    // Pupil
+    const actualPupilR = r * pupilSize * (1 + audioIntensity * 0.5);
+    ctx.beginPath();
+    ctx.arc(pupilX, pupilY, actualPupilR, 0, Math.PI * 2);
+    ctx.fillStyle = '#000';
+    ctx.fill();
+
+    // Pupil inner glow
+    const pupilGlow = ctx.createRadialGradient(pupilX, pupilY, 0, pupilX, pupilY, actualPupilR);
+    pupilGlow.addColorStop(0, `hsla(${hue}, 100%, 30%, ${audioIntensity * 0.5})`);
+    pupilGlow.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = pupilGlow;
+    ctx.fill();
+
+    // Specular highlights - multiple for realism
+    // Main highlight
+    ctx.beginPath();
+    ctx.arc(pupilX - actualPupilR * 0.4, pupilY - actualPupilR * 0.4, actualPupilR * 0.35, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+    ctx.fill();
+    // Secondary highlight
+    ctx.beginPath();
+    ctx.arc(pupilX + actualPupilR * 0.3, pupilY + actualPupilR * 0.2, actualPupilR * 0.15, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.fill();
+
+    // Eye outline glow
+    ctx.beginPath();
+    ctx.arc(x, y, eyeSize * r, 0, Math.PI * 2);
+    ctx.strokeStyle = `hsla(${hue}, 100%, 50%, ${0.3 + audioIntensity * 0.4})`;
+    ctx.lineWidth = 1.5;
+    ctx.shadowColor = `hsl(${hue}, 100%, 50%)`;
+    ctx.shadowBlur = 8 + audioIntensity * 15;
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    ctx.restore(); // Restore from squint clip
+
+    // Eyelid lines (top and bottom) for expression
+    ctx.beginPath();
+    ctx.ellipse(x, y - squintClip * 0.3, eyeSize * r * 1.05, eyeSize * r * 0.2, 0, Math.PI, Math.PI * 2);
+    ctx.strokeStyle = `hsla(${hue}, 80%, 60%, ${0.3 + face.squintAmount})`;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+}
+
+function drawEyes(audioIntensity) {
+    const eyeSize = face.eyeRadius * (1 + audioIntensity * 0.5);
+    const pupilSize = face.pupilRadius * (1 + audioIntensity * 0.3);
+    const leftEyeX = face.centerX - face.currentRadius * 0.3;
+    const rightEyeX = face.centerX + face.currentRadius * 0.3;
+    const eyeY = face.centerY - face.currentRadius * 0.2;
+    drawDetailedEye(leftEyeX, eyeY, eyeSize, pupilSize, audioIntensity, true);
+    drawDetailedEye(rightEyeX, eyeY, eyeSize, pupilSize, audioIntensity, false);
+}
+
+function drawNose(audioIntensity) {
+    const hue = (face.huePhase * 360) % 360;
+    const r = face.currentRadius;
+    const noseX = face.centerX;
+    const noseY = face.centerY + r * 0.05;
+    const flare = face.noseFlare;
+
+    // Nose bridge - subtle line of characters
+    for (let i = 0; i < 3; i++) {
+        const y = noseY - r * 0.05 + i * r * 0.05;
+        const char = chars[Math.floor(Math.random() * chars.length)];
+        ctx.font = `${fontSize * 0.6}px monospace`;
+        ctx.fillStyle = `hsla(${hue}, 80%, 65%, ${0.3 + audioIntensity * 0.2})`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(char, noseX, y);
+    }
+
+    // Nostrils
+    const nostrilSpread = r * 0.06 * (1 + flare);
+    // Left nostril
+    ctx.beginPath();
+    ctx.arc(noseX - nostrilSpread, noseY + r * 0.08, r * 0.025 * (1 + flare * 0.5), 0, Math.PI * 2);
+    ctx.strokeStyle = `hsla(${hue}, 100%, 55%, ${0.4 + audioIntensity * 0.3})`;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    // Right nostril
+    ctx.beginPath();
+    ctx.arc(noseX + nostrilSpread, noseY + r * 0.08, r * 0.025 * (1 + flare * 0.5), 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Nose tip highlight
+    ctx.beginPath();
+    ctx.arc(noseX, noseY + r * 0.05, r * 0.02, 0, Math.PI * 2);
+    ctx.fillStyle = `hsla(${hue}, 60%, 80%, ${0.15 + audioIntensity * 0.1})`;
+    ctx.fill();
+}
+
+function drawCheekBlush(audioIntensity) {
+    if (face.blushIntensity < 0.02) return;
+    const hue = (face.huePhase * 360) % 360;
+    const r = face.currentRadius;
+
+    // Left cheek blush
+    const leftCheekGrad = ctx.createRadialGradient(
+        face.centerX - r * 0.45, face.centerY + r * 0.1, 0,
+        face.centerX - r * 0.45, face.centerY + r * 0.1, r * 0.15
+    );
+    leftCheekGrad.addColorStop(0, `hsla(${(hue + 330) % 360}, 80%, 60%, ${face.blushIntensity * 0.4})`);
+    leftCheekGrad.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.beginPath();
+    ctx.arc(face.centerX - r * 0.45, face.centerY + r * 0.1, r * 0.15, 0, Math.PI * 2);
+    ctx.fillStyle = leftCheekGrad;
+    ctx.fill();
+
+    // Right cheek blush
+    const rightCheekGrad = ctx.createRadialGradient(
+        face.centerX + r * 0.45, face.centerY + r * 0.1, 0,
+        face.centerX + r * 0.45, face.centerY + r * 0.1, r * 0.15
+    );
+    rightCheekGrad.addColorStop(0, `hsla(${(hue + 330) % 360}, 80%, 60%, ${face.blushIntensity * 0.4})`);
+    rightCheekGrad.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.beginPath();
+    ctx.arc(face.centerX + r * 0.45, face.centerY + r * 0.1, r * 0.15, 0, Math.PI * 2);
+    ctx.fillStyle = rightCheekGrad;
+    ctx.fill();
+}
+
+function drawMouth(audioIntensity) {
+    const hue = (face.huePhase * 360) % 360;
+    const r = face.currentRadius;
+    const mouthX = face.centerX;
+    const mouthY = face.centerY + r * 0.3 + face.jawDrop * r * 0.1;
+    const mouthW = r * face.mouthWidth * (1 + audioIntensity * 0.2);
+    const mouthH = r * face.mouthHeight * (1 + audioIntensity * 2 + face.jawDrop * 1.5);
+    const smileCurve = face.smileAmount * r * 0.08;
+
+    // Mouth shadow for depth
+    ctx.beginPath();
+    ctx.ellipse(mouthX, mouthY + mouthH * 0.3, mouthW * 0.55, mouthH * 0.7, 0, 0, Math.PI * 2);
+    ctx.fillStyle = `hsla(${hue}, 50%, 5%, 0.3)`;
+    ctx.fill();
+
+    // Main mouth shape - rounded with smile curve
+    ctx.beginPath();
+    if (mouthH > r * 0.15) {
+        // Open mouth - elliptical
+        ctx.ellipse(mouthX, mouthY, mouthW * 0.5, mouthH * 0.5, 0, 0, Math.PI * 2);
+    } else {
+        // Closed/small - line with smile
+        ctx.moveTo(mouthX - mouthW * 0.5, mouthY);
+        ctx.quadraticCurveTo(mouthX, mouthY + smileCurve + mouthH, mouthX + mouthW * 0.5, mouthY);
+        ctx.quadraticCurveTo(mouthX, mouthY - mouthH * 0.3, mouthX - mouthW * 0.5, mouthY);
+    }
+
+    // Dark mouth interior
+    const mouthGrad = ctx.createRadialGradient(mouthX, mouthY, 0, mouthX, mouthY, mouthH);
+    mouthGrad.addColorStop(0, `hsla(${(hue + 180) % 360}, 80%, 15%, 0.8)`);
+    mouthGrad.addColorStop(1, `hsla(${hue}, 100%, 30%, 0.6)`);
+    ctx.fillStyle = mouthGrad;
+    ctx.fill();
+
+    // Glowing border
+    ctx.strokeStyle = `hsla(${hue}, 100%, 50%, ${0.4 + audioIntensity * 0.4})`;
+    ctx.lineWidth = 2;
+    ctx.shadowColor = `hsl(${hue}, 100%, 50%)`;
+    ctx.shadowBlur = 8 + audioIntensity * 15;
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    // Teeth - only when mouth is open enough
+    if (face.teethShow > 0.05 && mouthH > r * 0.12) {
+        const teethCount = 8;
+        const teethWidth = mouthW * 0.8 / teethCount;
+        const teethHeight = mouthH * 0.2 * face.teethShow;
+        const teethY = mouthY - mouthH * 0.35;
+
+        // Top teeth
+        for (let i = 0; i < teethCount; i++) {
+            const tx = mouthX - mouthW * 0.4 + i * teethWidth + teethWidth * 0.1;
+            // Only draw teeth inside mouth ellipse
+            const distFromCenter = Math.abs(tx - mouthX) / (mouthW * 0.5);
+            if (distFromCenter > 0.9) continue;
+
+            ctx.fillStyle = `hsla(${hue}, 20%, 90%, ${face.teethShow * 0.7})`;
+            ctx.fillRect(tx, teethY, teethWidth * 0.8, teethHeight);
+            // Tooth separator line
+            ctx.strokeStyle = `hsla(${hue}, 40%, 70%, ${face.teethShow * 0.3})`;
+            ctx.lineWidth = 0.5;
+            ctx.strokeRect(tx, teethY, teethWidth * 0.8, teethHeight);
+        }
+
+        // Bottom teeth (shorter)
+        const btTeethY = mouthY + mouthH * 0.15;
+        for (let i = 0; i < teethCount; i++) {
+            const tx = mouthX - mouthW * 0.4 + i * teethWidth + teethWidth * 0.1;
+            const distFromCenter = Math.abs(tx - mouthX) / (mouthW * 0.5);
+            if (distFromCenter > 0.9) continue;
+
+            ctx.fillStyle = `hsla(${hue}, 20%, 85%, ${face.teethShow * 0.6})`;
+            ctx.fillRect(tx, btTeethY, teethWidth * 0.8, teethHeight * 0.7);
+        }
+    }
+
+    // Tongue - peeks out at high intensity
+    if (face.tongueOut > 0.05 && mouthH > r * 0.1) {
+        const tongueW = mouthW * 0.3 * face.tongueOut;
+        const tongueH = mouthH * 0.4 * face.tongueOut;
+        const tongueY = mouthY + mouthH * 0.1;
+
+        ctx.beginPath();
+        ctx.ellipse(mouthX, tongueY, tongueW, tongueH, 0, 0, Math.PI);
+        const tongueGrad = ctx.createRadialGradient(mouthX, tongueY, 0, mouthX, tongueY, tongueH);
+        tongueGrad.addColorStop(0, `hsla(${(hue + 340) % 360}, 70%, 55%, ${face.tongueOut * 0.7})`);
+        tongueGrad.addColorStop(1, `hsla(${(hue + 350) % 360}, 60%, 40%, ${face.tongueOut * 0.5})`);
+        ctx.fillStyle = tongueGrad;
+        ctx.fill();
+
+        // Tongue center line
+        ctx.beginPath();
+        ctx.moveTo(mouthX, tongueY - tongueH * 0.3);
+        ctx.lineTo(mouthX, tongueY + tongueH * 0.8);
+        ctx.strokeStyle = `hsla(${(hue + 340) % 360}, 60%, 40%, ${face.tongueOut * 0.4})`;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+    }
+
+    // Lip shine
+    ctx.beginPath();
+    ctx.ellipse(mouthX, mouthY - mouthH * 0.3, mouthW * 0.2, mouthH * 0.1, 0, 0, Math.PI * 2);
+    ctx.fillStyle = `hsla(${hue}, 60%, 80%, ${0.1 + audioIntensity * 0.1})`;
+    ctx.fill();
+
+    // Character overlay on mouth
+    if (mouthH > r * 0.05) {
+        const mouthSegments = Math.min(10, Math.floor(mouthW / (fontSize * 0.5)));
+        for (let i = 0; i < mouthSegments; i++) {
+            const charX = mouthX - mouthW * 0.4 + (i + 0.5) * (mouthW * 0.8) / mouthSegments;
+            const charY = mouthY;
+            const char = chars[Math.floor(Math.random() * chars.length)];
+            ctx.font = `${fontSize * 0.6}px monospace`;
+            ctx.fillStyle = `hsla(${hue}, 100%, ${60 + Math.random() * 40}%, ${0.3 + audioIntensity * 0.3})`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(char, charX, charY);
+        }
+    }
+}
+
+function drawChin(audioIntensity) {
+    const hue = (face.huePhase * 360) % 360;
+    const r = face.currentRadius;
+
+    // Chin highlight
+    const chinY = face.centerY + r * 0.55;
+    ctx.beginPath();
+    ctx.arc(face.centerX, chinY, r * 0.08, 0, Math.PI * 2);
+    const chinGrad = ctx.createRadialGradient(face.centerX, chinY, 0, face.centerX, chinY, r * 0.08);
+    chinGrad.addColorStop(0, `hsla(${hue}, 40%, 70%, 0.1)`);
+    chinGrad.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = chinGrad;
+    ctx.fill();
+
+    // Subtle dimple
+    ctx.beginPath();
+    ctx.arc(face.centerX, chinY - r * 0.02, r * 0.015, 0, Math.PI * 2);
+    ctx.strokeStyle = `hsla(${hue}, 60%, 50%, 0.15)`;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+}
+
+// RGB waveform at bottom
+function drawWaveform(audioIntensity) {
+    if (!analyzer) return;
     const fftSize = analyzer.fftSize;
     const timeData = new Uint8Array(fftSize);
     analyzer.getByteTimeDomainData(timeData);
-    
-    // Position at absolute bottom
     const width = canvas.width;
     const height = canvas.height;
-    const bottomY = height - 10; // As low as possible
+    const bottomY = height - 10;
     const amplitude = height * 0.5 * audioIntensity;
-    
-    // Draw RGB gradient waveform
-    for(let channel = 0; channel < 3; channel++) {
-        const colors = ['red', 'green', 'blue'];
+
+    for (let channel = 0; channel < 3; channel++) {
         const offset = channel * 2;
-        
         ctx.beginPath();
-        
-        for(let i = 0; i < width; i++) {
+        for (let i = 0; i < width; i++) {
             const dataIndex = Math.floor((i / width) * (fftSize - 1));
             const safeIndex = Math.min(Math.max(0, dataIndex), fftSize - 1);
             const value = timeData[safeIndex];
-            
-            // Apply channel-specific offset for RGB effect
             const normalized = (value - 128) / 128;
             const y = bottomY + normalized * amplitude + offset;
-            
-            if(i === 0) {
-                ctx.moveTo(i, y);
-            } else {
-                ctx.lineTo(i, y);
-            }
+            if (i === 0) ctx.moveTo(i, y); else ctx.lineTo(i, y);
         }
-        
-        // Create color gradient for this channel
         const gradient = ctx.createLinearGradient(0, bottomY - amplitude, width, bottomY + amplitude);
-        gradient.addColorStop(0, `rgba(255, 0, 0, 0.8)`);
-        gradient.addColorStop(0.33, `rgba(0, 255, 0, 0.8)`);
-        gradient.addColorStop(0.66, `rgba(0, 0, 255, 0.8)`);
-        gradient.addColorStop(1, `rgba(255, 0, 255, 0.8)`);
-        
+        gradient.addColorStop(0, 'rgba(255,0,0,0.8)');
+        gradient.addColorStop(0.33, 'rgba(0,255,0,0.8)');
+        gradient.addColorStop(0.66, 'rgba(0,0,255,0.8)');
+        gradient.addColorStop(1, 'rgba(255,0,255,0.8)');
         ctx.strokeStyle = gradient;
         ctx.lineWidth = 2;
         ctx.stroke();
     }
-    
-    // Add filled area under waveform
+
     ctx.beginPath();
-    for(let i = 0; i < width; i++) {
+    for (let i = 0; i < width; i++) {
         const dataIndex = Math.floor((i / width) * (fftSize - 1));
         const safeIndex = Math.min(Math.max(0, dataIndex), fftSize - 1);
         const value = timeData[safeIndex];
         const normalized = (value - 128) / 128;
         const y = bottomY + normalized * amplitude;
-        
-        if(i === 0) {
-            ctx.moveTo(i, bottomY);
-            ctx.lineTo(i, y);
-        } else {
-            ctx.lineTo(i, y);
-        }
+        if (i === 0) { ctx.moveTo(i, bottomY); ctx.lineTo(i, y); } else ctx.lineTo(i, y);
     }
     ctx.lineTo(width, bottomY);
     ctx.closePath();
-    
-    // RGB gradient fill
     const fillGradient = ctx.createLinearGradient(0, bottomY - amplitude, 0, bottomY);
-    fillGradient.addColorStop(0, `rgba(255, 0, 0, 0.1)`);
-    fillGradient.addColorStop(0.33, `rgba(0, 255, 0, 0.1)`);
-    fillGradient.addColorStop(0.66, `rgba(0, 0, 255, 0.1)`);
-    fillGradient.addColorStop(1, `rgba(255, 0, 255, 0.1)`);
-    
+    fillGradient.addColorStop(0, 'rgba(255,0,0,0.1)');
+    fillGradient.addColorStop(0.33, 'rgba(0,255,0,0.1)');
+    fillGradient.addColorStop(0.66, 'rgba(0,0,255,0.1)');
+    fillGradient.addColorStop(1, 'rgba(255,0,255,0.1)');
     ctx.fillStyle = fillGradient;
     ctx.fill();
 }
 
-// Main draw function with 120fps optimization
-function drawVisualizer(timestamp){
-    if(!analyzer||!isVisualizing) return;
-    const delta=timestamp-lastFrameTime; 
-    if(delta<8.33){ // 120fps target (1000ms/120 ≈ 8.33ms)
-        animationFrameId=requestAnimationFrame(drawVisualizer);
-        return;
-    }
-    lastFrameTime=timestamp;
-    const intensity=parseFloat(intensitySlider.value);
-    const bufferLength=analyzer.frequencyBinCount; 
-    const freqData=new Uint8Array(bufferLength); 
+// Main draw loop
+function drawVisualizer(timestamp) {
+    if (!analyzer || !isVisualizing) return;
+    const delta = timestamp - lastFrameTime;
+    if (delta < 8.33) { animationFrameId = requestAnimationFrame(drawVisualizer); return; }
+    lastFrameTime = timestamp;
+
+    const intensity = parseFloat(intensitySlider.value);
+    const bufferLength = analyzer.frequencyBinCount;
+    const freqData = new Uint8Array(bufferLength);
     analyzer.getByteFrequencyData(freqData);
-    
+
     let sumLow = 0, sumMid = 0, sumHigh = 0;
-    for(let i=0; i<bufferLength; i++){
-        if(i < bufferLength*0.2) sumLow += freqData[i];
-        else if(i < bufferLength*0.6) sumMid += freqData[i];
+    const lowEnd = Math.floor(bufferLength * 0.2);
+    const midEnd = Math.floor(bufferLength * 0.6);
+    for (let i = 0; i < bufferLength; i++) {
+        if (i < lowEnd) sumLow += freqData[i];
+        else if (i < midEnd) sumMid += freqData[i];
         else sumHigh += freqData[i];
     }
-    const avgLow = sumLow / (bufferLength*0.2);
-    const avgMid = sumMid / (bufferLength*0.4);
-    const avgHigh = sumHigh / (bufferLength*0.4);
-    
-    const audioIntensity = Math.min(1, (avgLow*0.5 + avgMid*0.3 + avgHigh*0.2) / 255) * intensity;
-    
-    face.centerX=canvas.width/2;
-    face.centerY=canvas.height/2;
-    face.baseRadius=Math.min(canvas.width,canvas.height)*0.25;
-    
-    // DRAW ORDER:
-    drawMilkDropBackground(audioIntensity); // Background effects
-    drawMatrixBackground();  // Matrix code over background
-    drawCodeFace(audioIntensity);  // Face in center
-    drawWaveform(audioIntensity);  // RGB waveform at bottom
-    
-    animationFrameId=requestAnimationFrame(drawVisualizer);
+    const avgLow = sumLow / lowEnd;
+    const avgMid = sumMid / (midEnd - lowEnd);
+    const avgHigh = sumHigh / (bufferLength - midEnd);
+
+    const lowNorm = Math.min(1, avgLow / 255) * intensity;
+    const midNorm = Math.min(1, avgMid / 255) * intensity;
+    const highNorm = Math.min(1, avgHigh / 255) * intensity;
+    const audioIntensity = Math.min(1, (lowNorm * 0.5 + midNorm * 0.3 + highNorm * 0.2));
+
+    face.centerX = canvas.width / 2;
+    face.centerY = canvas.height / 2;
+    face.baseRadius = Math.min(canvas.width, canvas.height) * 0.25;
+
+    // Update face expression state
+    updateFaceState(audioIntensity, lowNorm, midNorm, highNorm);
+
+    // DRAW ORDER
+    drawMilkDropBackground(audioIntensity);
+    drawMatrixBackground();
+    drawCodeFace(audioIntensity);
+    drawWaveform(audioIntensity);
+
+    animationFrameId = requestAnimationFrame(drawVisualizer);
 }
 
 // Audio setup
-let audioContext=null, analyzer=null, sourceNode=null, stream=null;
-let animationFrameId=null, isVisualizing=false;
-const FFT_SIZE=1024, SMOOTHING=0.85;
-let lastFrameTime=performance.now();
+let audioContext = null, analyzer = null, sourceNode = null, stream = null;
+let animationFrameId = null, isVisualizing = false;
+const FFT_SIZE = 1024, SMOOTHING = 0.85;
+let lastFrameTime = performance.now();
 
-async function setupMicrophone(){
-    try{
-        stopVisualization();
-        stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
-        setupAudioContext(stream); 
-        modeIndicator.textContent='Microphone Active'; 
-        modeIndicator.className='mode-indicator mode-mic';
-        micButton.disabled=true; tabButton.disabled=true; stopButton.disabled=false;
-        welcomeOverlay.classList.add('hidden'); isVisualizing=true;
-        animationFrameId=requestAnimationFrame(drawVisualizer);
-    }catch(err){
-        console.error(err); alert('Mic error: '+(err.message||err.name));
-        modeIndicator.textContent='Mic Error'; micButton.disabled=false; tabButton.disabled=false;
-    }
+function setupAudioContext(mediaStream) {
+    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    analyzer = audioContext.createAnalyser();
+    analyzer.fftSize = FFT_SIZE;
+    analyzer.smoothingTimeConstant = SMOOTHING;
+    sourceNode = audioContext.createMediaStreamSource(mediaStream);
+    sourceNode.connect(analyzer);
 }
 
-async function setupTabAudio(){
-    try{
+async function setupMicrophone() {
+    try {
         stopVisualization();
-        if(!navigator.mediaDevices.getDisplayMedia) throw new Error('Tab audio only works in Chrome/Edge');
-        stream=await navigator.mediaDevices.getDisplayMedia({audio:true,video:true});
-        const videoTrack=stream.getVideoTracks()[0]; if(videoTrack) videoTrack.onended=()=>stopVisualization();
+        stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
         setupAudioContext(stream);
-        modeIndicator.textContent='Tab Audio Active'; 
-        modeIndicator.className='mode-indicator mode-tab';
-        micButton.disabled=true; tabButton.disabled=true; stopButton.disabled=false;
-        welcomeOverlay.classList.add('hidden'); isVisualizing=true;
-        animationFrameId=requestAnimationFrame(drawVisualizer);
-    }catch(err){
-        console.error(err); 
-        if(err.name==='NotAllowedError'||err.name==='AbortError') alert('You cancelled the tab selection.');
-        else alert('Tab audio error: '+(err.message||err.name));
-        modeIndicator.textContent='Tab Audio Error'; micButton.disabled=false; tabButton.disabled=false;
+        modeIndicator.textContent = 'Microphone Active';
+        modeIndicator.className = 'mode-indicator mode-mic';
+        micButton.disabled = true; tabButton.disabled = true; stopButton.disabled = false;
+        welcomeOverlay.classList.add('hidden');
+        isVisualizing = true;
+        animationFrameId = requestAnimationFrame(drawVisualizer);
+    } catch (err) {
+        console.error(err);
+        alert('Mic error: ' + (err.message || err.name));
+        modeIndicator.textContent = 'Mic Error';
+        micButton.disabled = false; tabButton.disabled = false;
     }
 }
 
-function setupAudioContext(stream){
-    if(!audioContext||audioContext.state==='closed') audioContext=new (window.AudioContext||window.webkitAudioContext)();
-    if(audioContext.state==='suspended') audioContext.resume();
-    analyzer=audioContext.createAnalyser();
-    analyzer.fftSize=FFT_SIZE; analyzer.smoothingTimeConstant=SMOOTHING;
-    sourceNode=audioContext.createMediaStreamSource(stream); sourceNode.connect(analyzer);
+async function setupTabAudio() {
+    try {
+        stopVisualization();
+        if (!navigator.mediaDevices.getDisplayMedia) throw new Error('Tab audio only works in Chrome/Edge');
+        stream = await navigator.mediaDevices.getDisplayMedia({ audio: true, video: true });
+        const videoTrack = stream.getVideoTracks()[0];
+        if (videoTrack) videoTrack.onended = () => stopVisualization();
+        setupAudioContext(stream);
+        modeIndicator.textContent = 'Tab Audio Active';
+        modeIndicator.className = 'mode-indicator mode-tab';
+        micButton.disabled = true; tabButton.disabled = true; stopButton.disabled = false;
+        welcomeOverlay.classList.add('hidden');
+        isVisualizing = true;
+        animationFrameId = requestAnimationFrame(drawVisualizer);
+    } catch (err) {
+        console.error(err);
+        if (err.name === 'NotAllowedError' || err.name === 'AbortError') alert('You cancelled the tab selection.');
+        else alert('Tab audio error: ' + (err.message || err.name));
+        modeIndicator.textContent = 'Tab Audio Error';
+        micButton.disabled = false; tabButton.disabled = false;
+    }
 }
 
-function stopVisualization(){
-    isVisualizing=false;
-    if(animationFrameId) cancelAnimationFrame(animationFrameId);
-    if(sourceNode) sourceNode.disconnect(); sourceNode=null;
-    if(analyzer) analyzer.disconnect(); analyzer=null;
-    if(audioContext){audioContext.close(); audioContext=null;}
-    if(stream){stream.getTracks().forEach(t=>t.stop()); stream=null;}
-    micButton.disabled=false; tabButton.disabled=false; stopButton.disabled=true;
-    modeIndicator.textContent='No Audio Source'; modeIndicator.className='mode-indicator';
+function stopVisualization() {
+    isVisualizing = false;
+    if (animationFrameId) { cancelAnimationFrame(animationFrameId); animationFrameId = null; }
+    if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+    if (sourceNode) { sourceNode.disconnect(); sourceNode = null; }
+    if (audioContext) { audioContext.close(); audioContext = null; }
+    analyzer = null;
+    micButton.disabled = false; tabButton.disabled = false; stopButton.disabled = true;
+    modeIndicator.textContent = 'No Audio Source';
+    modeIndicator.className = 'mode-indicator';
+    // Clear particles
+    faceParticles.length = 0;
 }
 
-micButton.addEventListener('click',setupMicrophone);
-tabButton.addEventListener('click',setupTabAudio);
-stopButton.addEventListener('click',stopVisualization);
-
+micButton.addEventListener('click', setupMicrophone);
+tabButton.addEventListener('click', setupTabAudio);
+stopButton.addEventListener('click', () => { stopVisualization(); welcomeOverlay.classList.remove('hidden'); });
 });
 </script>
 </body>
